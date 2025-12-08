@@ -8,7 +8,7 @@ services:
     environment:
       - POSTGRES_DB=jukebox_db
       - POSTGRES_USER=jukebox_user
-      - POSTGRES_PASSWORD=superpassword
+      - POSTGRES_PASSWORD=blen36
     ports:
       - "5432:5432"
 

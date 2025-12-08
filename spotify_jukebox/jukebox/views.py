@@ -2,6 +2,12 @@ from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from .models import Room
 from .forms import CreateRoomForm, JoinRoomForm
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from requests import Request, post
+from django.conf import settings
+from .utils import update_or_create_user_tokens, is_spotify_authenticated
 
 def home(request):
     """Главная страница: выбор (Создать или Войти)"""
@@ -64,3 +70,80 @@ def room(request, room_code):
         return render(request, 'jukebox/room.html', context)
     else:
         return redirect('home')
+
+
+class AuthURL(APIView):
+    def get(self, request, format=None):
+        scopes = 'user-read-playback-state user-modify-playback-state user-read-currently-playing'
+
+        # ИСПРАВЛЕН URL АВТОРИЗАЦИИ
+        url = Request('GET', 'https://accounts.spotify.com/authorize', params={
+            'scope': scopes,
+            'response_type': 'code',
+            'redirect_uri': settings.SPOTIPY_REDIRECT_URI,
+            'client_id': settings.SPOTIPY_CLIENT_ID
+        }).prepare().url
+
+        return Response({'url': url}, status=status.HTTP_200_OK)
+
+
+def spotify_callback(request):
+    """
+    Обрабатывает ответ от Spotify после попытки авторизации.
+    Обменивает код авторизации на токены и сохраняет их в базе данных/сессии.
+    """
+    code = request.GET.get('code')
+    error_query = request.GET.get('error') # Ошибка, если отказано в авторизации
+
+    # 1. Проверяем, не отказал ли пользователь в авторизации
+    if error_query is not None:
+        # Если пользователь нажал "Отменить", просто редиректим на главную
+        return redirect('/')
+
+    # 2. Обмен кода на токены
+    response = post('https://accounts.spotify.com/api/token', data={
+        'grant_type': 'authorization_code',
+        'code': code,
+        'redirect_uri': settings.SPOTIPY_REDIRECT_URI,
+        'client_id': settings.SPOTIPY_CLIENT_ID,
+        'client_secret': settings.SPOTIPY_CLIENT_SECRET
+    }).json()
+
+    access_token = response.get('access_token')
+    refresh_token = response.get('refresh_token')
+    expires_in = response.get('expires_in')
+    error_response = response.get('error') # Ошибка, если Spotify не выдал токены
+
+    # 3. Проверка ответа Spotify
+    if error_response or not access_token:
+        print(f"Spotify token exchange failed: {error_response}")
+        # Если обмен не удался, редиректим на главную
+        return redirect('/')
+
+    # 4. Создание сессии, если она не существует
+    if not request.session.exists(request.session.session_key):
+        request.session.create()
+
+    # 5. Сохранение токенов
+    if request.user.is_authenticated:
+        update_or_create_user_tokens(
+            request.user,
+            access_token,
+            response.get('token_type'), # Используем token_type напрямую
+            expires_in,
+            refresh_token
+        )
+        # УСПЕХ: Перенаправляем на главную страницу
+        return redirect('/')
+    else:
+        # Если юзер не залогинен в Django, токен не к кому привязать.
+        # В реальном приложении это может быть логин или сообщение об ошибке.
+        # Для простоты редиректим на главную
+        print("User is not authenticated in Django.")
+        return redirect('/')
+
+
+class IsAuthenticated(APIView):
+    def get(self, request, format=None):
+        is_authenticated = is_spotify_authenticated(request.user)
+        return Response({'status': is_authenticated}, status=status.HTTP_200_OK)
