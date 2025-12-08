@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from .views import AuthURL, spotify_callback, IsAuthenticated
 
 urlpatterns = [
     path('', views.home, name='home'),
@@ -7,4 +8,7 @@ urlpatterns = [
     path('join/', views.join_room, name='join_room'),
     # Важный момент: теперь URL комнаты выглядит как /room/ABCD123/
     path('room/<str:room_code>/', views.room, name='room'),
+    path('get-auth-url', AuthURL.as_view()),
+    path('redirect', spotify_callback),
+    path('is-authenticated', IsAuthenticated.as_view()),
 ]
