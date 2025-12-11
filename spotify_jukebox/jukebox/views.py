@@ -8,6 +8,7 @@ from rest_framework import status
 from requests import Request, post
 from django.conf import settings
 from .utils import update_or_create_user_tokens, is_spotify_authenticated
+from .spotify_util import get_current_song, pause_song, play_song, skip_song
 
 def home(request):
     """Главная страница: выбор (Создать или Войти)"""
@@ -147,3 +148,61 @@ class IsAuthenticated(APIView):
     def get(self, request, format=None):
         is_authenticated = is_spotify_authenticated(request.user)
         return Response({'status': is_authenticated}, status=status.HTTP_200_OK)
+
+
+class CurrentSong(APIView):
+    def get(self, request, format=None):
+        room_code = self.request.session.get('room_code')
+        room = Room.objects.filter(code=room_code).first()
+
+        if not room:
+            return Response({}, status=status.HTTP_404_NOT_FOUND)
+
+        host = room.host
+        # Вызываем логику Человека 2
+        song = get_current_song(host)
+
+        if song is None:
+            return Response({'is_playing': False}, status=status.HTTP_200_OK)
+
+        # Докидываем инфу, если нужно
+        song['is_host'] = self.request.session.session_key == host.session_key
+
+        return Response(song, status=status.HTTP_200_OK)
+
+
+class PauseSong(APIView):
+    def put(self, request, format=None):
+        room_code = self.request.session.get('room_code')
+        room = Room.objects.filter(code=room_code).first()
+
+        # Проверка прав (Хост или разрешено гостям)
+        if self.request.session.session_key == room.host.session_key or room.guest_can_pause:
+            pause_song(room.host)  # Функция Человека 2
+            return Response({}, status=status.HTTP_204_NO_CONTENT)
+
+        return Response({}, status=status.HTTP_403_FORBIDDEN)
+
+
+class PlaySong(APIView):
+    def put(self, request, format=None):
+        room_code = self.request.session.get('room_code')
+        room = Room.objects.filter(code=room_code).first()
+
+        if self.request.session.session_key == room.host.session_key or room.guest_can_pause:
+            play_song(room.host)  # Функция Человека 2
+            return Response({}, status=status.HTTP_204_NO_CONTENT)
+
+        return Response({}, status=status.HTTP_403_FORBIDDEN)
+
+
+class SkipSong(APIView):
+    def post(self, request, format=None):
+        room_code = self.request.session.get('room_code')
+        room = Room.objects.filter(code=room_code).first()
+
+        if self.request.session.session_key == room.host.session_key:
+            skip_song(room.host)  # Функция Человека 2
+            return Response({}, status=status.HTTP_204_NO_CONTENT)
+
+        return Response({}, status=status.HTTP_403_FORBIDDEN)
