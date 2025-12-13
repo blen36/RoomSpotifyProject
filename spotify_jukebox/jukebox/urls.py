@@ -15,4 +15,7 @@ urlpatterns = [
     path('api/pause', views.PauseSong.as_view()),
     path('api/play', views.PlaySong.as_view()),
     path('api/skip', views.SkipSong.as_view()),
+    path('api/spotify/search', views.SearchSong.as_view()),   # Поиск
+    path('api/spotify/queue', views.AddToQueue.as_view()),    # Очередь
+    path('api/spotify/vote', views.VoteToSkip.as_view()),     # Голосование
 ]

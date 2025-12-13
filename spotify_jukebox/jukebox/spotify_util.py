@@ -126,3 +126,10 @@ def play_song(host_user):
 def skip_song(host_user):
     """Переключает на следующий трек."""
     return execute_spotify_api_request(host_user, "me/player/next", post_=True)
+def search_spotify(host, query):
+    print("SEARCH FUNCTION NOT IMPLEMENTED YET")
+    return []
+
+def add_to_queue(host, uri):
+    print("ADD QUEUE FUNCTION NOT IMPLEMENTED YET")
+    return
