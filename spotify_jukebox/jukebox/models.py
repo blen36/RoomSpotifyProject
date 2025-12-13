@@ -65,3 +65,13 @@ class Track(models.Model):
 
     def __str__(self):
         return f"{self.title} in {self.room.code}"
+
+
+class Vote(models.Model):
+    user = models.CharField(max_length=50, unique=False)  # Сохраняем session_key пользователя
+    room = models.ForeignKey(Room, on_delete=models.CASCADE)
+    song_id = models.CharField(max_length=50)  # ID песни, против которой голосовали
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user} voted to skip {self.song_id}"

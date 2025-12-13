@@ -1,6 +1,6 @@
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
-from .models import Room
+from .models import Room, Vote
 from .forms import CreateRoomForm, JoinRoomForm
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -8,6 +8,8 @@ from rest_framework import status
 from requests import Request, post
 from django.conf import settings
 from .utils import update_or_create_user_tokens, is_spotify_authenticated
+from .spotify_util import get_current_song, pause_song, play_song, skip_song,search_spotify,add_to_queue
+
 
 def home(request):
     """Главная страница: выбор (Создать или Войти)"""
@@ -147,3 +149,150 @@ class IsAuthenticated(APIView):
     def get(self, request, format=None):
         is_authenticated = is_spotify_authenticated(request.user)
         return Response({'status': is_authenticated}, status=status.HTTP_200_OK)
+
+
+class CurrentSong(APIView):
+    def get(self, request, format=None):
+        room_code = self.request.session.get('room_code')
+        room = Room.objects.filter(code=room_code).first()
+
+        if not room:
+            return Response({}, status=status.HTTP_404_NOT_FOUND)
+
+        host = room.host
+        # Вызываем логику Человека 2
+        song = get_current_song(host)
+
+        if song is None:
+            return Response({'is_playing': False}, status=status.HTTP_200_OK)
+
+        # Докидываем инфу, если нужно
+        song['is_host'] = self.request.session.session_key == host.session_key
+
+        return Response(song, status=status.HTTP_200_OK)
+
+
+class PauseSong(APIView):
+    def put(self, request, format=None):
+        room_code = self.request.session.get('room_code')
+        room = Room.objects.filter(code=room_code).first()
+
+        # Проверка прав (Хост или разрешено гостям)
+        if self.request.session.session_key == room.host.session_key or room.guest_can_pause:
+            pause_song(room.host)  # Функция Человека 2
+            return Response({}, status=status.HTTP_204_NO_CONTENT)
+
+        return Response({}, status=status.HTTP_403_FORBIDDEN)
+
+
+class PlaySong(APIView):
+    def put(self, request, format=None):
+        room_code = self.request.session.get('room_code')
+        room = Room.objects.filter(code=room_code).first()
+
+        if self.request.session.session_key == room.host.session_key or room.guest_can_pause:
+            play_song(room.host)  # Функция Человека 2
+            return Response({}, status=status.HTTP_204_NO_CONTENT)
+
+        return Response({}, status=status.HTTP_403_FORBIDDEN)
+
+
+class SkipSong(APIView):
+    def post(self, request, format=None):
+        room_code = self.request.session.get('room_code')
+        room = Room.objects.filter(code=room_code).first()
+
+        if self.request.session.session_key == room.host.session_key:
+            skip_song(room.host)  # Функция Человека 2
+            return Response({}, status=status.HTTP_204_NO_CONTENT)
+
+        return Response({}, status=status.HTTP_403_FORBIDDEN)
+
+
+class SearchSong(APIView):
+    """
+    Ищет треки и возвращает HTML (для HTMX).
+    """
+
+    def get(self, request, format=None):
+        room_code = self.request.session.get('room_code')
+        room = Room.objects.filter(code=room_code).first()
+
+        if not room:
+            return Response({}, status=status.HTTP_404_NOT_FOUND)
+
+        query = request.GET.get('query')
+
+        # Если поиск пустой, возвращаем пустой HTML или ничего
+        if not query:
+            return Response('')
+
+        # Вызываем функцию поиска (пишет Человек №2)
+        results = search_spotify(room.host, query)
+
+        # ВАЖНО: Возвращаем HTML, а не JSON!
+        # Файл search_results.html создаст Человек №3, мы просто ссылаемся на него.
+        return render(request, 'jukebox/partials/search_results.html', {'songs': results})
+
+
+class AddToQueue(APIView):
+    """
+    Добавляет выбранный трек в очередь.
+    """
+
+    def post(self, request, format=None):
+        room_code = self.request.session.get('room_code')
+        room = Room.objects.filter(code=room_code).first()
+
+        if not room:
+            return Response({}, status=status.HTTP_404_NOT_FOUND)
+
+        uri = request.data.get('uri')  # Получаем URI трека от фронтенда
+        add_to_queue(room.host, uri)  # Функция Человека №2
+
+        return Response({}, status=status.HTTP_204_NO_CONTENT)
+
+
+class VoteToSkip(APIView):
+    """
+    Логика голосования за пропуск трека.
+    """
+
+    def post(self, request, format=None):
+        room_code = self.request.session.get('room_code')
+        room = Room.objects.filter(code=room_code).first()
+
+        if not room:
+            return Response({}, status=status.HTTP_404_NOT_FOUND)
+
+        # 1. Узнаем, что сейчас играет
+        song_info = get_current_song(room.host)
+        if not song_info or 'id' not in song_info:
+            return Response({'message': 'Nothing playing'}, status=status.HTTP_204_NO_CONTENT)
+
+        current_song_id = song_info.get('id')
+        user_session = self.request.session.session_key
+
+        # 2. Очистка старых голосов (если песня сменилась)
+        # Удаляем все голоса в этой комнате, где ID песни НЕ совпадает с текущей
+        Vote.objects.filter(room=room).exclude(song_id=current_song_id).delete()
+
+        # 3. Проверяем, голосовал ли уже этот пользователь за ЭТУ песню
+        vote_exists = Vote.objects.filter(room=room, user=user_session, song_id=current_song_id).exists()
+
+        if not vote_exists:
+            # Создаем голос
+            Vote.objects.create(room=room, user=user_session, song_id=current_song_id)
+
+        # 4. Считаем общее количество голосов
+        votes_count = Vote.objects.filter(room=room, song_id=current_song_id).count()
+
+        # 5. Проверяем, набралось ли достаточно голосов для пропуска
+        # votes_to_skip берем из настроек комнаты (по умолчанию 2)
+        if votes_count >= room.votes_to_skip:
+            skip_song(room.host)  # Функция Человека №2
+            # После пропуска можно удалить голоса, но это необязательно,
+            # так как шаг 2 почистит их при следующем вызове
+            Vote.objects.filter(room=room, song_id=current_song_id).delete()
+
+        return Response({}, status=status.HTTP_204_NO_CONTENT)
