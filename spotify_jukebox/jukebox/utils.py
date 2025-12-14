@@ -2,10 +2,13 @@ from datetime import timedelta
 from django.utils import timezone
 from requests import post, put, get
 from django.conf import settings
+import base64
+import requests
 
 # Основные URL Spotify API
 BASE_URL = "https://api.spotify.com/v1/"
-TOKEN_URL = "https://accounts.spotify.com/api/token"
+TOKEN_URL = "https://accounts.spotify.com/api/token" # Адрес для токенов
+# python manage.py shell
 
 
 # ==========================================
@@ -63,62 +66,101 @@ def refresh_spotify_token(user):
 
     refresh_token = get_user_tokens(user).refresh_token
 
+    # --- ИСПРАВЛЕНИЕ НАЧАЛОСЬ ЗДЕСЬ ---
+
+    # 1. Создаем строку Basic Base64(ID:SECRET)
+    auth_string = f"{settings.SPOTIPY_CLIENT_ID}:{settings.SPOTIPY_CLIENT_SECRET}"
+    auth_bytes = auth_string.encode('utf-8')
+    auth_base64 = base64.b64encode(auth_bytes).decode('utf-8')
+
+    headers = {
+        'Authorization': f'Basic {auth_base64}',
+        'Content-Type': 'application/x-www-form-urlencoded'  # Обязательно для POST-запроса на токен
+    }
+
+    data = {
+        'grant_type': 'refresh_token',
+        'refresh_token': refresh_token,
+    }
+
     try:
-        response = post(TOKEN_URL, data={
-            'grant_type': 'refresh_token',
-            'refresh_token': refresh_token,
-            'client_id': settings.SPOTIPY_CLIENT_ID,
-            'client_secret': settings.SPOTIPY_CLIENT_SECRET
-        }).json()
+        response = post(TOKEN_URL, headers=headers, data=data).json()
+
+        # --- ИСПРАВЛЕНИЕ ЗАКОНЧИЛОСЬ ЗДЕСЬ ---
 
         access_token = response.get('access_token')
         token_type = response.get('token_type')
         expires_in = response.get('expires_in')
-        # Если новый refresh_token не пришел, оставляем старый
         new_refresh_token = response.get('refresh_token', refresh_token)
 
-        update_or_create_user_tokens(user, access_token, token_type, expires_in, new_refresh_token)
+        # Проверка на наличие токена перед обновлением
+        if access_token:
+            update_or_create_user_tokens(user, access_token, token_type, expires_in, new_refresh_token)
+        else:
+            print(f"Error refreshing token: Token was not returned. Response: {response}")
+
     except Exception as e:
         print(f"Error refreshing token: {e}")
-
-
 # ==========================================
 # 2. ФУНКЦИИ API (ПОИСК, ПЛЕЕР, ОЧЕРЕДЬ)
 # ==========================================
 
 def execute_spotify_api_request(host, endpoint, post_=False, put_=False, data=None):
-    """
-    Универсальная функция для отправки запросов к Spotify API
-    """
-    from .models import SpotifyToken
+    from .models import SpotifyToken  # Оставляем импорт здесь
 
     tokens = get_user_tokens(host)
     if not tokens:
         return {'error': 'No tokens found'}
 
+    # Проверка и обновление токена (Критически важно!)
+    if not is_spotify_authenticated(host):
+        return {'error': 'Token not authenticated or failed refresh'}
+
     headers = {'Content-Type': 'application/json', 'Authorization': "Bearer " + tokens.access_token}
 
-    # Если endpoint уже содержит полный URL, используем его, иначе добавляем BASE_URL
-    if endpoint.startswith("http"):
-        url = endpoint
-    else:
-        url = BASE_URL + endpoint
+    # Собираем URL
+    url = BASE_URL + endpoint
 
     try:
         if post_:
-            response = post(url, headers=headers, json=data)  # json=data автоматически ставит нужные заголовки
+            response = post(url, headers=headers, json=data)
         elif put_:
             response = put(url, headers=headers, json=data)
         else:
             response = get(url, {}, headers=headers)
 
-        # Пытаемся вернуть JSON, если ответ не пустой
-        if response.content:
-            return response.json()
-        return {'Status': 'Success'}  # Если тело ответа пустое (например, при 204 No Content)
-    except Exception as e:
-        return {'Error': f'Issue with request: {str(e)}'}
+        if response.status_code == 204:
+            return {'Status': 'Success'}
 
+        # Если код 200, возвращаем JSON
+        if response.status_code == 200:
+            return response.json()
+
+        # Если код не 200, вызываем исключение, чтобы попасть в except-блок
+        response.raise_for_status()
+
+    except requests.exceptions.HTTPError as e:
+        # --- НОВЫЙ БЛОК ОБРАБОТКИ ОШИБОК HTTP (4xx/5xx) ---
+        print(f"DEBUG: HTTPError {response.status_code} для {endpoint}")  # <-- Лог статуса
+
+        try:
+            error_json = response.json()
+            # Логируем полный JSON-ответ, чтобы увидеть, что не так со Scope
+            print(f"DEBUG: Spotify JSON Error Details: {error_json}")
+
+            return {'Error': f"Spotify API Error: {error_json.get('error', {}).get('message', 'Unknown Error')}",
+                    'Status_Code': response.status_code}
+        except Exception:
+            # Если Spotify вернул 403, но без JSON
+            return {'Error': f'HTTP Error {response.status_code}. No JSON body.',
+                    'Status_Code': response.status_code}
+
+    except requests.exceptions.RequestException as e:
+        # Общая ошибка сети/коннекта
+        return {'Error': f'Network Issue: {str(e)}'}
+
+    except Exception as e:
+        return {'Error': f'General Issue: {str(e)}'}
 
 def search_spotify(host_user, query):
     """
@@ -160,6 +202,29 @@ def add_to_queue(host_user, track_uri):
     endpoint = f"me/player/queue?uri={track_uri}"
     return execute_spotify_api_request(host_user, endpoint, post_=True)
 
+
+def get_spotify_devices(user):
+    """
+    Получает список всех доступных Spotify Connect устройств.
+    """
+    endpoint = "me/player/devices"
+    response = execute_spotify_api_request(user, endpoint)
+
+    # --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: ЛОГИКА ПРОВЕРКИ ---
+
+    # 1. Проверяем, есть ли ошибка HTTP (403, 401, 400)
+    if response and response.get('Status_Code') in [400, 401, 403]:
+        print(f"🛑 ОШИБКА АВТОРИЗАЦИИ/ПРАВ: {response.get('Error', 'Неизвестная ошибка 4xx')}")
+        # Выводим весь ответ, чтобы увидеть детали ошибки
+        print(f"🛑 ПОЛНЫЙ ОТВЕТ: {response}")
+        return []
+
+    # 2. Проверяем, есть ли поле 'devices'
+    if not response or 'devices' not in response:
+        print(f"DEBUG: API вернул некорректный ответ. Ответ: {response}")
+        return []
+
+    return response.get('devices', [])
 
 def get_current_song(host):
     """
