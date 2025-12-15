@@ -1,0 +1,99 @@
+<div class="text-center mb-3">
+    <img src="{{ song.image_url }}"
+         alt="Album Cover"
+         class="rounded album-art"
+         style="width: 100%; max-width: 300px; aspect-ratio: 1/1; object-fit: cover;">
+</div>
+
+<div class="text-center mb-4">
+    <h3 class="fw-bold text-white mb-1">{{ song.title }}</h3>
+    <p class="text-secondary mb-0">{{ song.artist }}</p>
+</div>
+
+<div class="progress-container mb-4">
+    <div class="progress bg-secondary bg-opacity-25" style="height: 6px; border-radius: 3px; overflow: hidden;">
+        <div id="progress"
+             class="progress-bar bg-success"
+             role="progressbar"
+             style="width: 0%; transition: width 0.1s linear;">
+        </div>
+    </div>
+    <div class="d-flex justify-content-between mt-1">
+        <span class="small text-secondary" id="curr-time">0:00</span>
+        <span class="small text-secondary">{{ song.duration_fmt }}</span> </div>
+</div>
+
+<div class="d-flex justify-content-center align-items-center gap-4">
+    {% if song.is_playing %}
+        <button class="btn btn-circle btn-lg btn-success hover-scale shadow-lg"
+                hx-put="/api/pause"
+                hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                hx-swap="none">
+            <i class="fas fa-pause text-black"></i>
+        </button>
+    {% else %}
+        <button class="btn btn-circle btn-lg btn-white hover-scale shadow-lg"
+                hx-put="/api/play"
+                hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                hx-swap="none">
+            <i class="fas fa-play text-black ml-1"></i>
+        </button>
+    {% endif %}
+
+    <button class="btn btn-circle btn-secondary hover-scale"
+            hx-post="/api/skip"
+            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+        <i class="fas fa-step-forward text-white"></i>
+    </button>
+</div>
+
+<script>
+    // 1. Очищаем старый таймер, если он был (важно при обновлении HTMX!)
+    if (window.progressInterval) {
+        clearInterval(window.progressInterval);
+    }
+
+    // 2. Получаем данные из Django (превращаем их в JS-переменные)
+    var songDuration = {{ song.duration }};  // В миллисекундах
+    var currentProgress = {{ song.time }};   // В миллисекундах
+    var isPlaying = {{ song.is_playing|yesno:"true,false" }};
+
+    // Функция форматирования времени (мсек -> 02:30)
+    function formatTime(ms) {
+        var totalSeconds = Math.floor(ms / 1000);
+        var minutes = Math.floor(totalSeconds / 60);
+        var seconds = totalSeconds % 60;
+        return minutes + ':' + (seconds < 10 ? '0' : '') + seconds;
+    }
+
+    // 3. Запускаем таймер
+    if (isPlaying) {
+        window.progressInterval = setInterval(function() {
+            currentProgress += 100; // Добавляем 100мс каждые 0.1 сек
+
+            // Защита от переполнения
+            if (currentProgress > songDuration) currentProgress = songDuration;
+
+            // Вычисляем процент
+            var percent = (currentProgress / songDuration) * 100;
+
+            // Обновляем ширину полоски
+            var bar = document.getElementById('progress');
+            if (bar) {
+                bar.style.width = percent + '%';
+            }
+
+            // Обновляем цифры таймера
+            var timeLabel = document.getElementById('curr-time');
+            if (timeLabel) {
+                timeLabel.innerText = formatTime(currentProgress);
+            }
+
+        }, 100);
+    } else {
+        // Если пауза, просто ставим текущий процент без таймера
+        var percent = (currentProgress / songDuration) * 100;
+        document.getElementById('progress').style.width = percent + '%';
+        document.getElementById('curr-time').innerText = formatTime(currentProgress);
+    }
+</script>
