@@ -5,7 +5,8 @@ from .views import (
     spotify_callback,
     IsAuthenticated,
     LeaveRoom,    # НОВЫЙ
-    UpdateRoom    # НОВЫЙ
+    UpdateRoom,
+    GetRoom# НОВЫЙ
 )
 
 urlpatterns = [
@@ -26,4 +27,5 @@ urlpatterns = [
     path('api/spotify/vote', views.VoteToSkip.as_view()),     # Голосование
     path('leave-room', LeaveRoom.as_view()),
     path('update-room', UpdateRoom.as_view()),
+    path('get-room', GetRoom.as_view()),
 ]
