@@ -1,6 +1,12 @@
 from django.urls import path
 from . import views
-from .views import AuthURL, spotify_callback, IsAuthenticated
+from .views import (
+    AuthURL,
+    spotify_callback,
+    IsAuthenticated,
+    LeaveRoom,    # НОВЫЙ
+    UpdateRoom    # НОВЫЙ
+)
 
 urlpatterns = [
     path('', views.home, name='home'),
@@ -18,4 +24,6 @@ urlpatterns = [
     path('api/spotify/search', views.SearchSong.as_view()),   # Поиск
     path('api/spotify/queue', views.AddToQueue.as_view()),    # Очередь
     path('api/spotify/vote', views.VoteToSkip.as_view()),     # Голосование
+    path('leave-room', LeaveRoom.as_view()),
+    path('update-room', UpdateRoom.as_view()),
 ]

@@ -12,6 +12,8 @@ from .spotify_util import get_current_song, pause_song, play_song, skip_song
 import base64
 from .utils import TOKEN_URL
 import requests
+from django.http import HttpResponse # Нужно для HTMX ответа
+from .serializers import RoomSerializer, CreateRoomSerializer, UpdateRoomSerializer # Добавь UpdateRoomSerializer
 
 
 def home(request):
@@ -338,3 +340,59 @@ class VoteToSkip(APIView):
             Vote.objects.filter(room=room, song_id=current_song_id).delete()
 
         return Response({}, status=status.HTTP_204_NO_CONTENT)
+
+
+class LeaveRoom(APIView):
+    def post(self, request, format=None):
+        # 1. Удаляем код комнаты из сессии пользователя
+        if 'room_code' in request.session:
+            self.request.session.pop('room_code')
+
+            # 2. Проверяем, был ли пользователь хостом
+            host_id = request.session.session_key
+            room_results = Room.objects.filter(host=host_id)
+
+            # Если он был хостом — удаляем комнату целиком
+            if room_results.exists():
+                room = room_results[0]
+                room.delete()
+
+        # 3. Специальный ответ для HTMX
+        # Когда HTMX видит этот заголовок, он сам перенаправляет пользователя
+        response = HttpResponse(status=200, content='Success')
+        response['HX-Redirect'] = '/'
+        return response
+
+
+class UpdateRoom(APIView):
+    serializer_class = UpdateRoomSerializer
+
+    def patch(self, request, format=None):
+        # Валидируем данные через наш новый сериализатор
+        serializer = self.serializer_class(data=request.data)
+
+        if serializer.is_valid():
+            guest_can_pause = serializer.validated_data.get('guest_can_pause')
+            votes_to_skip = serializer.validated_data.get('votes_to_skip')
+            code = serializer.validated_data.get('code')
+
+            # Ищем комнату
+            queryset = Room.objects.filter(code=code)
+            if not queryset.exists():
+                return Response({'msg': 'Room not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+            room = queryset[0]
+            user_id = self.request.session.session_key
+
+            # ПРОВЕРКА ПРАВ: Только хост может менять настройки
+            if room.host != user_id:
+                return Response({'msg': 'You are not the host.'}, status=status.HTTP_403_FORBIDDEN)
+
+            # Обновляем поля
+            room.guest_can_pause = guest_can_pause
+            room.votes_to_skip = votes_to_skip
+            room.save(update_fields=['guest_can_pause', 'votes_to_skip'])
+
+            return Response(UpdateRoomSerializer(room).data, status=status.HTTP_200_OK)
+
+        return Response({'Bad Request': "Invalid Data..."}, status=status.HTTP_400_BAD_REQUEST)
