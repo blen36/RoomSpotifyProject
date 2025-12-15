@@ -4,6 +4,7 @@ from requests import post, put, get
 from django.conf import settings
 import base64
 import requests
+from .models import Room
 
 # Основные URL Spotify API
 BASE_URL = "https://api.spotify.com/v1/"
@@ -225,6 +226,18 @@ def get_spotify_devices(user):
         return []
 
     return response.get('devices', [])
+
+# --- НОВАЯ ФУНКЦИЯ ---
+def user_is_host(room_code, session_key):
+    """
+    Проверяет, является ли владелец сессии хостом комнаты.
+    """
+    try:
+        room = Room.objects.get(code=room_code)
+        # Сравниваем session_key хоста комнаты с текущим session_key пользователя
+        return room.host == session_key
+    except Room.DoesNotExist:
+        return False
 
 def get_current_song(host):
     """

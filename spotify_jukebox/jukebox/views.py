@@ -14,7 +14,7 @@ from .utils import TOKEN_URL
 import requests
 from django.http import HttpResponse # Нужно для HTMX ответа
 from .serializers import RoomSerializer, CreateRoomSerializer, UpdateRoomSerializer # Добавь UpdateRoomSerializer
-
+from .utils import user_is_host
 
 def home(request):
     """Главная страница: выбор (Создать или Войти)"""
@@ -396,3 +396,36 @@ class UpdateRoom(APIView):
             return Response(UpdateRoomSerializer(room).data, status=status.HTTP_200_OK)
 
         return Response({'Bad Request': "Invalid Data..."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GetRoom(APIView):
+    def get(self, request, format=None):
+        # 1. Получаем код из параметров URL
+        code = request.GET.get('code')
+
+        # 2. Если кода нет в URL, пробуем взять из сессии (если пользователь уже внутри)
+        if not code:
+            code = request.session.get('room_code')
+
+        if code:
+            try:
+                room = Room.objects.get(code=code)
+
+                # Убеждаемся, что сессия существует
+                if not request.session.exists(request.session.session_key):
+                    request.session.create()
+
+                # 3. Формируем ответ
+                data = {
+                    'votes_to_skip': room.votes_to_skip,
+                    'guest_can_pause': room.guest_can_pause,
+                    'is_host': user_is_host(code, request.session.session_key)
+                }
+
+                return Response(data, status=status.HTTP_200_OK)
+
+            except Room.DoesNotExist:
+                return Response({'Room Not Found': 'Invalid Room Code.'}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response({'Bad Request': 'Code param not found in request or session.'},
+                        status=status.HTTP_400_BAD_REQUEST)
