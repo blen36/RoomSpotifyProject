@@ -4,6 +4,8 @@ from datetime import timedelta
 from django.conf import settings
 from .models import SpotifyToken
 import json
+import base64  # <--- Добавил этот импорт, он нужен для обновления токена
+
 # Базовые URL Spotify
 BASE_URL = "https://api.spotify.com/v1/"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
@@ -20,32 +22,51 @@ def get_user_tokens(host_user):
 def refresh_spotify_token(user_tokens):
     """
     Проверяет срок действия токена и обновляет его, если он истек.
+    ИСПРАВЛЕНО: Теперь использует правильную авторизацию через заголовки.
     """
     # Проверяем, истек ли токен (или истекает вот-вот)
     if user_tokens.expires_in <= timezone.now():
-        response = requests.post(TOKEN_URL, data={
+
+        # 1. Подготовка Basic Auth (Client ID и Secret)
+        auth_string = f"{settings.SPOTIPY_CLIENT_ID}:{settings.SPOTIPY_CLIENT_SECRET}"
+        auth_base64 = base64.b64encode(auth_string.encode('utf-8')).decode('utf-8')
+
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': 'Basic ' + auth_base64
+        }
+
+        # 2. Тело запроса
+        data = {
             'grant_type': 'refresh_token',
-            'refresh_token': user_tokens.refresh_token,
-            'client_id': settings.SPOTIFY_CLIENT_ID,
-            'client_secret': settings.SPOTIFY_CLIENT_SECRET
-        }).json()
+            'refresh_token': user_tokens.refresh_token
+        }
+
+        try:
+            response = requests.post(TOKEN_URL, data=data, headers=headers).json()
+        except:
+            return  # Если ошибка сети, выходим
 
         # Получаем новые данные
         access_token = response.get('access_token')
         expires_in = response.get('expires_in')  # Обычно 3600 секунд
+        token_type = response.get('token_type')
 
         # Обновляем запись в БД
         if access_token:
             user_tokens.access_token = access_token
             # Пересчитываем абсолютное время истечения
             user_tokens.expires_in = timezone.now() + timedelta(seconds=expires_in)
-            user_tokens.save(update_fields=['access_token', 'expires_in'])
+            if token_type:
+                user_tokens.token_type = token_type
+            user_tokens.save(update_fields=['access_token', 'expires_in', 'token_type'])
 
 
-def execute_spotify_api_request(host_user, endpoint, post_=False, put_=False):
+def execute_spotify_api_request(host_user, endpoint, post_=False, put_=False, data=None):
     """
     Универсальная функция для отправки запросов к Spotify API.
     Автоматически обновляет токен перед запросом.
+    Добавлен аргумент data для отправки тела запроса (например, для очереди).
     """
     tokens = get_user_tokens(host_user)
     if not tokens:
@@ -58,85 +79,104 @@ def execute_spotify_api_request(host_user, endpoint, post_=False, put_=False):
     url = BASE_URL + endpoint
 
     # 2. Выполняем запрос
-    if post_:
-        response = requests.post(url, headers=headers)
-    elif put_:
-        response = requests.put(url, headers=headers)
-    else:
-        response = requests.get(url, {}, headers=headers)
-
-    # Обработка ответов
     try:
+        if post_:
+            response = requests.post(url, headers=headers, json=data)  # ИСПРАВЛЕНО: передаем json=data
+        elif put_:
+            response = requests.put(url, headers=headers, json=data)
+        else:
+            response = requests.get(url, {}, headers=headers)
+
+        # Пробуем вернуть JSON, если нет — пустой словарь
+        if not response.content:
+            return {}
         return response.json()
-    except:
-        # Часто методы типа pause/play возвращают пустой ответ (204 No Content),
-        # поэтому возвращаем ошибку только если это действительно ошибка
-        return {'Error': 'Request failed or returned no content'}
+
+    except Exception as e:
+        return {'Error': f'Request failed: {str(e)}'}
 
 
 def get_current_song(user):
-    """
-    Получает информацию о текущем проигрываемом треке от Spotify.
-    """
+    """Получает информацию о текущем проигрываемом треке."""
     endpoint = "player/currently-playing"
     response = execute_spotify_api_request(user, endpoint)
 
-    # 1. Проверка на ошибки или пустой ответ
-    if response.status_code == 204:  # 204 No Content - ничего не играет
+    if 'error' in response or 'item' not in response:
         return {}
 
-    try:
-        data = response.json()
-    except Exception:
-        # Если ответ не JSON, возвращаем пустой объект
-        return {}
-
-    # ----------------------------------------------------
-    # --- БЛОК ОТЛАДКИ (DEBUGGING BLOCK) ---
-    # Этот код покажет нам, что именно Spotify присылает,
-    # чтобы мы поняли, почему 'is_playing' ложно.
-    print("\n--- RAW SPOTIFY RESPONSE START ---")
-    # Используем json.dumps для красивого форматирования вывода
-    print(json.dumps(data, indent=4, ensure_ascii=False))
-    print("--- RAW SPOTIFY RESPONSE END ---\n")
-    # ----------------------------------------------------
-
-    if data.get('item') is None:
-        return {}
-
-    # 2. Парсинг данных трека
-    item = data.get('item')
+    item = response.get('item')
     duration = item.get('duration_ms')
-    progress = data.get('progress_ms')
+    progress = response.get('progress_ms')
     album_cover = item.get('album').get('images')[0].get('url')
+    is_playing = response.get('is_playing')
+    song_id = item.get('id')
 
-    # ПРОВЕРКА: Почему is_playing = False? (ЭТО КЛЮЧЕВАЯ ПЕРЕМЕННАЯ!)
-    is_playing = data.get('is_playing')
+    # Формируем строку артистов (Artist1, Artist2...)
+    artist_names = ""
+    for i, artist in enumerate(item.get('artists')):
+        if i > 0:
+            artist_names += ", "
+        name = artist.get('name')
+        artist_names += name
 
     song = {
         'title': item.get('name'),
-        'artist': item.get('artists')[0].get('name'),
+        'artist': artist_names,
         'duration': duration,
         'time': progress,
         'image_url': album_cover,
         'is_playing': is_playing,
-        'votes': 0,  # Временно 0, голоса считаются в views
-        'id': item.get('id')
+        'votes': 0,
+        'id': song_id
     }
 
     return song
 
 
 def pause_song(host_user):
-    """Ставит воспроизведение на паузу."""
     return execute_spotify_api_request(host_user, "me/player/pause", put_=True)
 
 
 def play_song(host_user):
-    """Запускает воспроизведение."""
     return execute_spotify_api_request(host_user, "me/player/play", put_=True)
 
 
 def skip_song(host_user):
-    """Переключает на следующий трек."""
     return execute_spotify_api_request(host_user, "me/player/next", post_=True)
+
+
+# --- НОВЫЕ ФУНКЦИИ (которых не хватало для views.py) ---
+
+def search_spotify(host_user, query):
+    """Ищет треки в Spotify."""
+    # Кодируем пробелы для URL
+    formatted_query = requests.utils.quote(query)
+    endpoint = f"search?q={formatted_query}&type=track&limit=5"
+
+    response = execute_spotify_api_request(host_user, endpoint)
+
+    if 'tracks' not in response:
+        return []
+
+    tracks = response['tracks']['items']
+    results = []
+
+    for track in tracks:
+        # Собираем артистов
+        artist_names = ", ".join([artist['name'] for artist in track['artists']])
+
+        results.append({
+            'name': track['name'],
+            'artist': artist_names,
+            'image_url': track['album']['images'][-1]['url'] if track['album']['images'] else '',
+            'uri': track['uri'],  # URI нужен для добавления в очередь
+            'id': track['id']
+        })
+
+    return results
+
+
+def add_to_queue(host_user, uri):
+    """Добавляет трек в очередь воспроизведения."""
+    endpoint = f"me/player/queue?uri={uri}"
+    execute_spotify_api_request(host_user, endpoint, post_=True)
