@@ -1,0 +1,33 @@
+{% extends 'jukebox/base.html' %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6 col-lg-5">
+
+        <div class="glass-panel p-4 mt-4">
+            <h2 class="h4 text-center mb-4">Create Room</h2>
+
+            <form method="post">
+                {% csrf_token %}
+
+                <div class="mb-3">
+                    <label class="form-label">Votes required to skip</label>
+                    {{ form.votes_to_skip }}
+                </div>
+
+                <div class="form-check form-switch mb-4">
+                    {{ form.guest_can_pause }}
+                    <label class="form-check-label ms-2">
+                        Guests can pause/play
+                    </label>
+                </div>
+
+                <button type="submit" class="btn btn-spotify w-100">
+                    Create Room
+                </button>
+            </form>
+        </div>
+
+    </div>
+</div>
+{% endblock %}
