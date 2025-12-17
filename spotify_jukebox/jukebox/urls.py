@@ -4,7 +4,7 @@ from .views import (
     AuthURL, IsAuthenticated, CurrentSong,
     PauseSong, PlaySong, SkipSong, SearchSong,
     AddToQueue, VoteToSkip, LeaveRoom, UpdateRoom,
-    GetRoom, spotify_callback, PrevSong  # <--- Проверь, что здесь PrevSong
+    GetRoom, spotify_callback, PrevSong, GetQueue  # <--- Проверь, что здесь PrevSong
 )
 
 urlpatterns = [
@@ -25,6 +25,7 @@ urlpatterns = [
     path('api/spotify/search', SearchSong.as_view()),
     path('api/add-to-queue', AddToQueue.as_view()),
     path('api/vote-to-skip', VoteToSkip.as_view()),
+    path('api/queue', GetQueue.as_view()),
 
     # API Настройки и сессия
     path('api/is-authenticated', IsAuthenticated.as_view()),
