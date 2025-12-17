@@ -18,22 +18,21 @@
                 <h2 class="h4 fw-bold mb-0">{{ room.code }}</h2>
             </div>
 
-            <button id="settings-btn"
-                    class="btn btn-outline-light btn-sm"
-                    style="{% if not is_host %}display: none;{% endif %}"
+            {% if is_host %}
+            <button class="btn btn-outline-light btn-sm"
                     data-bs-toggle="modal"
                     data-bs-target="#settingsModal"
                     hx-get="/api/get-room?code={{ room.code }}"
-                    hx-target="#settings-form-content"
-                    hx-trigger="click">
+                    hx-target="#settings-form-content">
                 <i class="bi bi-gear-fill"></i>
             </button>
+            {% endif %}
         </div>
 
-        <!-- Блок статуса Spotify -->
+        <!-- Статус Spotify -->
         <div id="spotify-status"
              class="alert alert-warning text-center mb-4"
-             style="display: none;">
+             style="display:none;">
             <p class="mb-2 fw-bold">
                 Host must connect Spotify to enable music control
             </p>
@@ -43,23 +42,26 @@
             </button>
         </div>
 
-        <!-- ВСЕ функции Spotify -->
+        <!-- Spotify функционал -->
         <div id="spotify-features">
 
             <!-- Плеер -->
             <div id="music-player"
-                 class="glass-panel p-4 mb-4"
+                 class="glass-panel p-4 mb-3"
                  hx-get="/api/current-song/"
                  hx-trigger="every 1000ms"
                  hx-swap="innerHTML">
-
-                <div class="mb-3">
-                     <div class="spinner-border text-success" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                     </div>
-                     <p class="text-secondary mt-2">Connecting to Spotify...</p>
-                </div>
+                <div class="text-secondary">Loading player…</div>
             </div>
+
+            <!-- КНОПКА ОЧЕРЕДИ -->
+            <button class="btn btn-outline-light btn-sm w-100 mb-4"
+                    data-bs-toggle="modal"
+                    data-bs-target="#queueModal"
+                    hx-get="/api/queue"
+                    hx-target="#queue-content">
+                <i class="bi bi-music-note-list"></i> Open Queue
+            </button>
 
             <hr class="border-secondary my-4">
 
@@ -90,13 +92,28 @@
     </div>
 </div>
 
+<!-- МОДАЛКА ОЧЕРЕДИ -->
+<div class="modal fade" id="queueModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content bg-dark text-white border-secondary">
+            <div class="modal-header border-secondary">
+                <h5 class="modal-title">Room Queue</h5>
+                <button class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="queue-content">
+                <!-- HTMX загрузит очередь -->
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- МОДАЛКА НАСТРОЕК -->
-<div class="modal fade" id="settingsModal" tabindex="-1" aria-hidden="true">
+<div class="modal fade" id="settingsModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content bg-dark text-white border-secondary">
             <div class="modal-header border-secondary">
                 <h5 class="modal-title">Room Settings</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                <button class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <form id="settings-form">
@@ -104,7 +121,7 @@
                 </form>
             </div>
             <div class="modal-footer border-secondary">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                 <button class="btn btn-primary"
                         hx-patch="/update-room"
                         hx-include="#settings-form"
@@ -118,50 +135,28 @@
     </div>
 </div>
 
-<!-- JS ЛОГИКА -->
+{% if is_host %}
 <script>
 document.addEventListener("DOMContentLoaded", function () {
-
-    const isHost = {{ is_host|yesno:"true,false" }};
     const statusBlock = document.getElementById("spotify-status");
     const featuresBlock = document.getElementById("spotify-features");
     const connectBtn = document.getElementById("connect-spotify-btn");
 
-    // Если это гость - ему не нужно проверять подключение Spotify хоста через этот скрипт,
-    // но если вы хотите скрывать плеер у гостя, пока хост не подключился, логику нужно расширить.
-    // Пока оставим как у вас:
-    if (!isHost) {
-        return;
-    }
-
-    // 1. ИСПРАВЛЕНО: Добавлен префикс /api/
     fetch("/api/is-authenticated")
-        .then(res => {
-            if (!res.ok) throw new Error("API Error");
-            return res.json();
-        })
+        .then(res => res.json())
         .then(data => {
-            // Если статус false (не подключен) -> показываем кнопку, скрываем плеер
             if (!data.status) {
                 statusBlock.style.display = "block";
-                featuresBlock.style.display = "none"; // Скрываем плеер и поиск
-            } else {
-                // Если подключен -> скрываем кнопку, показываем плеер
-                statusBlock.style.display = "none";
-                featuresBlock.style.display = "block";
+                featuresBlock.style.display = "none";
             }
-        })
-        .catch(err => console.error("Error checking auth:", err));
+        });
 
-    // 2. ИСПРАВЛЕНО: Добавлен префикс /api/
-    connectBtn?.addEventListener("click", function () {
+    connectBtn?.addEventListener("click", () => {
         fetch("/api/get-auth-url")
-            .then(res => res.json())
-            .then(data => {
-                window.location.href = data.url;
-            });
+            .then(r => r.json())
+            .then(data => window.location.href = data.url);
     });
-
 });
 </script>
+{% endif %}
 {% endblock %}

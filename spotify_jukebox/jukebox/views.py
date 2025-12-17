@@ -1,6 +1,6 @@
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
-from .models import Room, Vote
+from .models import Room, Vote, Track
 from .forms import CreateRoomForm, JoinRoomForm
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -153,7 +153,7 @@ class IsAuthenticated(APIView):
 class CurrentSong(APIView):
     def get(self, request, format=None):
         # 1. Ищем комнату
-        room_code = self.request.session.get('room_code')
+        room_code = request.session.get('room_code')
         room = Room.objects.filter(code=room_code).first()
 
         if not room and request.user.is_authenticated:
@@ -165,33 +165,52 @@ class CurrentSong(APIView):
         host = room.host
         is_spotify_authenticated(host)
 
+        # 2. Получаем текущий трек Spotify
         song_info = get_current_song(host)
 
-        # 2. ПРОВЕРКА: Если данные есть, мы ДОЛЖНЫ их вернуть
+        # ---- 🔥 СИНХРОНИЗАЦИЯ ОЧЕРЕДИ ----
+        if song_info and 'id' in song_info:
+            current_spotify_id = song_info['id']
+
+            # Берём первый трек очереди
+            first_track = (
+                Track.objects
+                .filter(room=room)
+                .order_by('added_at')
+                .first()
+            )
+
+            if first_track:
+                # spotify_uri = spotify:track:XXXX
+                queued_spotify_id = first_track.spotify_uri.split(':')[-1]
+
+                # Если сейчас играет первый трек очереди — удаляем его
+                if queued_spotify_id == current_spotify_id:
+                    first_track.delete()
+
+        # 3. Если есть данные о треке — формируем контекст
         if song_info and 'id' in song_info:
             duration = song_info.get('duration', 0)
             current_time = song_info.get('time', 0)
 
-            # Расчет прогресса
             progress = (current_time / duration * 100) if duration > 0 else 0
 
-            # Формируем контекст из song_info
             context = {
                 'title': song_info.get('title'),
                 'artist': song_info.get('artist'),
                 'image_url': song_info.get('image_url'),
                 'is_playing': song_info.get('is_playing'),
                 'votes': song_info.get('votes', 0),
-                'votes_required': room.votes_to_skip,  # Берем из модели комнаты
+                'votes_required': room.votes_to_skip,
                 'progress_percent': progress,
                 'display_time': f"{int((current_time / 1000) // 60)}:{int((current_time / 1000) % 60):02d}",
                 'display_duration': f"{int((duration / 1000) // 60)}:{int((duration / 1000) % 60):02d}",
-                'is_host': (request.user == host)
+                'is_host': (request.user == host),
             }
-            # ОТПРАВЛЯЕМ ДАННЫЕ В ШАБЛОН (Этого не было!)
+
             return render(request, 'jukebox/song.html', context)
 
-        # 3. Если данных нет или Spotify вернул {}, только тогда отдаем False
+        # 4. Если Spotify ничего не играет
         return render(request, 'jukebox/song.html', {
             'is_playing': False,
             'error_message': "No active device found. Play music on Spotify!"
@@ -289,24 +308,36 @@ class PrevSong(APIView):
 
 class AddToQueue(APIView):
     def post(self, request, format=None):
-        # 1. Ищем комнату
         room_code = request.session.get('room_code')
         room = Room.objects.filter(code=room_code).first()
-        if not room:
-            return Response({'Error': 'Room not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        # 2. Получаем URI (пробуем и из JSON, и из обычной формы)
+        if not room:
+            return Response({'error': 'Room not found'}, status=404)
+
         uri = request.data.get('uri') or request.POST.get('uri')
+        title = request.data.get('title')
+        artist = request.data.get('artist')
+        image_url = request.data.get('image_url')
 
         if not uri:
-            return Response({'Error': 'No URI provided'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'No URI'}, status=400)
 
-        # 3. Добавляем в очередь через утилиту
-        # Убедимся, что токен свежий
+        # 1️⃣ Добавляем в Spotify
         is_spotify_authenticated(room.host)
         add_to_queue(room.host, uri)
 
-        return Response({}, status=status.HTTP_204_NO_CONTENT)
+        # 2️⃣ СОХРАНЯЕМ В БД (ВОТ ЧЕГО НЕ ХВАТАЛО)
+        Track.objects.create(
+            room=room,
+            added_by=request.user,
+            title=title,
+            artist=artist,
+            spotify_uri=uri,
+            album_cover_url=image_url
+        )
+
+        return Response({}, status=204)
+
 
 class VoteToSkip(APIView):
     def post(self, request, format=None):
@@ -400,3 +431,19 @@ class GetRoom(APIView):
                 return Response({'Room Not Found': 'Invalid Room Code.'}, status=status.HTTP_404_NOT_FOUND)
         return Response({'Bad Request': 'Code param not found in request or session.'},
                         status=status.HTTP_400_BAD_REQUEST)
+
+class GetQueue(APIView):
+    def get(self, request, format=None):
+        room_code = request.session.get('room_code')
+        room = Room.objects.filter(code=room_code).first()
+
+        if not room:
+            return HttpResponse("Room not found", status=404)
+
+        tracks = room.tracks.order_by('added_at')
+
+        return render(
+            request,
+            'jukebox/partials/queue.html',
+            {'tracks': tracks}
+        )
