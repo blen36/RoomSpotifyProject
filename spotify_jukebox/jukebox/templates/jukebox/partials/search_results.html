@@ -1,9 +1,11 @@
 {% if spotify_not_connected %}
 <div class="text-center text-warning mt-3">
     <p>Host is not connected to Spotify</p>
-    <a href="/api/get-auth-url" class="btn btn-success rounded-pill mt-2">
+    {% if is_host %}
+    <a href="/api/get-auth-url/" class="btn btn-success rounded-pill mt-2">
         <i class="bi bi-spotify"></i> Connect Spotify
     </a>
+    {% endif %}
 </div>
 
 {% else %}
@@ -19,7 +21,7 @@
         </div>
 
         <button class="btn btn-sm btn-success rounded-pill px-3"
-                hx-post="/api/add-to-queue"
+                hx-post="/api/add-to-queue/"
                 hx-vals='{
                     "uri": "{{ song.uri }}",
                     "title": "{{ song.title }}",
@@ -33,7 +35,6 @@
                     this.disabled=true;
                     this.classList.remove('btn-success');
                     this.classList.add('btn-outline-secondary');
-                    /* Обновляем очередь мгновенно */
                     htmx.trigger('#queue-content', 'load');
                 ">
             <i class="bi bi-plus-lg"></i> Add
