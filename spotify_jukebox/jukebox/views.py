@@ -19,12 +19,13 @@ from django.shortcuts import render, redirect
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth import login
 from django.contrib import messages
+from rest_framework.permissions import IsAuthenticated
 
 def home(request):
     return render(request, 'jukebox/home.html')
 
 
-@login_required(login_url='/admin/login/')
+@login_required
 def create_room(request):
     if request.method == 'POST':
         form = CreateRoomForm(request.POST)
@@ -38,7 +39,7 @@ def create_room(request):
         form = CreateRoomForm()
     return render(request, 'jukebox/create_room.html', {'form': form})
 
-
+@login_required
 def join_room(request):
     if request.method == 'POST':
         form = JoinRoomForm(request.POST)
@@ -53,6 +54,7 @@ def join_room(request):
         form = JoinRoomForm()
     return render(request, 'jukebox/join_room.html', {'form': form})
 
+@login_required(login_url='/login/')
 def room(request, room_code):
     room_qs = Room.objects.filter(code=room_code)
     if room_qs.exists():
@@ -265,6 +267,7 @@ class SkipSong(APIView):
 
 
 class SearchSong(APIView):
+    permission_classes = [IsAuthenticated]
     def get(self, request, format=None):
         room_code = request.session.get('room_code')
         room = Room.objects.filter(code=room_code).first()
