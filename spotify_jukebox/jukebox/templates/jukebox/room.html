@@ -6,7 +6,7 @@
 
         <div class="d-flex justify-content-between align-items-center mb-4">
             <button class="btn btn-outline-danger btn-sm"
-                    hx-post="/leave-room"
+                    hx-post="/leave-room/"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
                 <i class="bi bi-box-arrow-left"></i> Leave
             </button>
@@ -20,7 +20,7 @@
             <button class="btn btn-outline-light btn-sm"
                     data-bs-toggle="modal"
                     data-bs-target="#settingsModal"
-                    hx-get="/api/get-room?code={{ room.code }}"
+                    hx-get="/api/get-room/?code={{ room.code }}"
                     hx-target="#settings-form-content">
                 <i class="bi bi-gear-fill"></i>
             </button>
@@ -46,7 +46,7 @@
             <button class="btn btn-outline-light btn-sm w-100 mb-4"
                     data-bs-toggle="modal"
                     data-bs-target="#queueModal"
-                    hx-get="/api/queue"
+                    hx-get="/api/queue/"
                     hx-target="#queue-content">
                 <i class="bi bi-music-note-list"></i> Open Queue
             </button>
@@ -63,7 +63,7 @@
                            name="query"
                            class="form-control bg-dark text-white border-secondary"
                            placeholder="Search Spotify tracks..."
-                           hx-get="/api/spotify/search"
+                           hx-get="/api/spotify/search/"
                            hx-trigger="keyup changed delay:500ms"
                            hx-target="#search-results"
                            autocomplete="off">
@@ -83,7 +83,7 @@
             </div>
             <div class="modal-body"
                  id="queue-content"
-                 hx-get="/api/queue"
+                 hx-get="/api/queue/"
                  hx-trigger="every 5s, load"
                  hx-swap="innerHTML">
                 <div class="text-center p-3 text-secondary">Loading queue...</div>
@@ -107,7 +107,7 @@
             <div class="modal-footer border-secondary">
                 <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                 <button class="btn btn-primary"
-                        hx-patch="/update-room"
+                        hx-patch="/update-room/"
                         hx-include="#settings-form"
                         hx-vals='{"code": "{{ room.code }}"}'
                         hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
@@ -119,28 +119,27 @@
     </div>
 </div>
 
-{% if is_host %}
 <script>
 document.addEventListener("DOMContentLoaded", function () {
     const statusBlock = document.getElementById("spotify-status");
-    const featuresBlock = document.getElementById("spotify-features");
     const connectBtn = document.getElementById("connect-spotify-btn");
 
-    fetch("/api/is-authenticated")
+    // Проверка авторизации работает для всех
+    fetch("/api/is-authenticated/")
         .then(res => res.json())
         .then(data => {
             if (!data.status) {
                 statusBlock.style.display = "block";
                 {% if not is_host %}
-                // Меняем текст для гостя, чтобы он не искал кнопку
-                statusBlock.innerHTML = '<p class="mb-0 fw-bold">Waiting for the host to connect Spotify...</p>';
+                statusBlock.innerHTML = '<p class="mb-0 fw-bold text-center">Waiting for the host to connect Spotify...</p>';
                 {% endif %}
             }
         });
 
+    // Кнопка коннекта только для хоста
     {% if is_host %}
     connectBtn?.addEventListener("click", () => {
-        fetch("/api/get-auth-url")
+        fetch("/api/get-auth-url/")
             .then(r => r.json())
             .then(data => {
                 if (data.url) window.location.href = data.url;
@@ -149,5 +148,4 @@ document.addEventListener("DOMContentLoaded", function () {
     {% endif %}
 });
 </script>
-{% endif %}
 {% endblock %}

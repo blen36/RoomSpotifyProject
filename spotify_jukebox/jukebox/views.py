@@ -19,7 +19,7 @@ from django.shortcuts import render, redirect
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth import login
 from django.contrib import messages
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated as DRF_IsAuthenticated
 
 def home(request):
     return render(request, 'jukebox/home.html')
@@ -262,37 +262,38 @@ class SkipSong(APIView):
 
 
 class SearchSong(APIView):
-    permission_classes = [IsAuthenticated]
+    # Оставляем пустым, чтобы избежать конфликта с твоим IsAuthenticated
+    permission_classes = []
+
     def get(self, request, format=None):
         room_code = request.session.get('room_code')
         room = Room.objects.filter(code=room_code).first()
+
         if not room:
-            return Response({}, status=status.HTTP_404_NOT_FOUND)
+            # Для HTMX лучше возвращать пустую строку или простой текст ошибки
+            return HttpResponse("Room not found", status=404)
 
         query = request.GET.get('query')
+        # Если поисковый запрос пустой, просто возвращаем пустой результат
         if not query:
             return render(request, 'jukebox/partials/search_results.html', {'songs': []})
 
-        # 🔴 ВАЖНО: проверяем, авторизован ли ХОСТ в Spotify
+        # Проверяем авторизацию ХОСТА в Spotify
         if not is_spotify_authenticated(room.host):
             return render(
                 request,
                 'jukebox/partials/search_results.html',
                 {
                     'songs': [],
-                    'spotify_not_connected': True
+                    'spotify_not_connected': True,
+                    'is_host': (request.user == room.host)  # Чтобы показать кнопку только хосту
                 }
             )
 
-        # 🔴 Поиск ТОЛЬКО от имени хоста
+        # Поиск от имени хоста
         songs = search_spotify(room.host, query)
 
-        return render(
-            request,
-            'jukebox/partials/search_results.html',
-            {'songs': songs}
-        )
-
+        return render(request, 'jukebox/partials/search_results.html', {'songs': songs})
 
 class PrevSong(APIView):
     def post(self, request, format=None):
