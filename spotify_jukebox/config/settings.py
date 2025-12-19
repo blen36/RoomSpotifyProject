@@ -30,12 +30,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'insecure-default-key-for-dev')
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-# 1. Разрешаем Django принимать запросы от Cloudflare
-ALLOWED_HOSTS = ['spotify-room.serveousercontent.com', 'localhost', '127.0.0.1']
-
-# 2. Обязательно для передачи данных (CSRF) через туннель
-CSRF_TRUSTED_ORIGINS = ['https://spotify-room.serveousercontent.com']
-# Application definition
+ALLOWED_HOSTS = ['room-spotify.ru', 'localhost', '127.0.0.1']
+CSRF_TRUSTED_ORIGINS = ['https://room-spotify.ru']
 
 INSTALLED_APPS = [
     'django.contrib.admin',
