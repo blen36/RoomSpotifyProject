@@ -20,6 +20,7 @@ from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth import login
 from django.contrib import messages
 from rest_framework.permissions import IsAuthenticated as DRF_IsAuthenticated
+from .spotify_util import is_spotify_authenticated
 
 def home(request):
     return render(request, 'jukebox/home.html')
@@ -27,13 +28,22 @@ def home(request):
 
 @login_required
 def create_room(request):
-    # Гарантируем, что сессия существует
+    # 1. ПРОВЕРКА SPOTIFY
+    # Если хост не привязал Spotify, отправляем его на страницу с кнопкой
+    if not is_spotify_authenticated(request.user):
+        # Передаем в контекст текущий URL, чтобы после авторизации вернуться сюда
+        return render(request, 'jukebox/connect_spotify.html')
+
+    # 2. ТВОЯ ЛОГИКА СЕССИЙ
     if not request.session.exists(request.session.session_key):
         request.session.create()
 
     if request.method == 'POST':
         form = CreateRoomForm(request.POST)
         if form.is_valid():
+            # Очистка старых комнат (чтобы не падал сервер, о чем говорили в начале)
+            Room.objects.filter(host=request.user).delete()
+
             room = form.save(commit=False)
             room.host = request.user
             room.save()
@@ -46,8 +56,8 @@ def create_room(request):
             return redirect('room', room_code=room.code)
     else:
         form = CreateRoomForm()
-    return render(request, 'jukebox/create_room.html', {'form': form})
 
+    return render(request, 'jukebox/create_room.html', {'form': form})
 
 @login_required
 def join_room(request):
@@ -107,10 +117,11 @@ class AuthURL(APIView):
         )
 
         # ОФИЦИАЛЬНЫЙ URL авторизации
+        # Временно замените settings.SPOTIPY_REDIRECT_URI на прямую строку
         url = Request('GET', 'https://accounts.spotify.com/authorize', params={
             'scope': scopes,
             'response_type': 'code',
-            'redirect_uri': settings.SPOTIPY_REDIRECT_URI,
+            'redirect_uri': 'https://room-spotify.ru/api/spotify/callback/',  # ПРЯМАЯ ССЫЛКА
             'client_id': settings.SPOTIPY_CLIENT_ID,
             'show_dialog': 'true'
         }).prepare().url
@@ -198,6 +209,9 @@ class IsAuthenticated(APIView):
 
         return Response({'status': False}, status=status.HTTP_200_OK)
 
+from django.utils import timezone
+from django.http import HttpResponse
+
 class CurrentSong(APIView):
     def get(self, request, format=None):
         # 1. Пытаемся достать код комнаты из сессии
@@ -208,29 +222,43 @@ class CurrentSong(APIView):
         if not room and request.user.is_authenticated:
             room = Room.objects.filter(host=request.user).last()
             if room:
-                request.session['room_code'] = room.code  # Восстанавливаем сессию
+                request.session['room_code'] = room.code
+                request.session.save()
 
-        # 3. Если комнату так и не нашли
+        # 3. Если комнату так и не нашли (уже удалена другим гостем или хостом)
         if not room:
-            return render(request, 'jukebox/song.html', {
-                'is_playing': False,
-                'error_message': "Room not found. Please join again."
-            })
+            response = HttpResponse(status=204)
+            response['HX-Redirect'] = '/' # Выкидываем гостя на главную
+            return response
 
+        # --- ЛОГИКА ЗАКРЫТИЯ КОМНАТЫ ---
         host = room.host
+        is_host = (request.user == host)
 
-        # 4. Проверяем авторизацию в Spotify (и обновляем токен если надо)
+        if is_host:
+            # Хост на связи — обновляем время "пульса"
+            room.save(update_fields=['last_active'])
+        else:
+            # Зашел гость — проверяем, жив ли хост
+            if not room.is_host_online():
+                room.delete() # Удаляем комнату, так как хост пропал
+                response = HttpResponse(status=204)
+                response['HX-Redirect'] = '/'
+                return response
+        # -------------------------------
+
+        # 4. Проверяем авторизацию в Spotify
         if not is_spotify_authenticated(host):
             return render(request, 'jukebox/song.html', {
                 'is_playing': False,
-                'needs_auth': True,  # Флаг для шаблона, чтобы показать кнопку Connect
-                'is_host': (request.user == host)
+                'needs_auth': True,
+                'is_host': is_host
             })
 
         # 5. Получаем текущий трек
         song_info = get_current_song(host)
 
-        # Синхронизация очереди (удаляем трек из БД, если он заиграл в Spotify)
+        # Синхронизация очереди
         if song_info and 'id' in song_info:
             current_spotify_id = song_info['id']
             first_track = Track.objects.filter(room=room).order_by('added_at').first()
@@ -239,7 +267,7 @@ class CurrentSong(APIView):
                 if queued_spotify_id == current_spotify_id:
                     first_track.delete()
 
-        # 6. Если данные есть — формируем контекст
+        # 6. Формируем контекст
         if song_info and 'id' in song_info:
             duration = song_info.get('duration', 0)
             current_time = song_info.get('time', 0)
@@ -255,7 +283,7 @@ class CurrentSong(APIView):
                 'progress_percent': progress,
                 'display_time': f"{int((current_time / 1000) // 60)}:{int((current_time / 1000) % 60):02d}",
                 'display_duration': f"{int((duration / 1000) // 60)}:{int((duration / 1000) % 60):02d}",
-                'is_host': (request.user == host),
+                'is_host': is_host,
             }
             return render(request, 'jukebox/song.html', context)
 
@@ -298,20 +326,29 @@ class PlaySong(APIView):
 
         return Response({}, status=status.HTTP_403_FORBIDDEN)
 
+
 class SkipSong(APIView):
     def post(self, request, format=None):
         room_code = self.request.session.get('room_code')
         room = Room.objects.filter(code=room_code).first()
 
-        # ИСПРАВЛЕНО: Логика сравнения хоста (Только хост может скипать без голосования)
+        if not room:
+            return Response({'Error': 'Room not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Проверяем, является ли пользователь хостом
         is_host = request.user.is_authenticated and room.host == request.user
 
-        if is_host:
+        # ЛОГИКА: Скипаем, если это Хост ИЛИ если в настройках разрешено гостям (guest_can_pause)
+        if is_host or room.guest_can_pause:
             skip_song(room.host)
+
+            # Очищаем голоса за пропуск, так как песня сменилась
+            Vote.objects.filter(room=room).delete()
+
             return Response({}, status=status.HTTP_204_NO_CONTENT)
 
-        return Response({}, status=status.HTTP_403_FORBIDDEN)
-
+        # Если гость нажал, а прав нет — возвращаем 403
+        return Response({'Message': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
 
 class SearchSong(APIView):
     # Оставляем пустым, чтобы избежать конфликта с твоим IsAuthenticated
@@ -516,3 +553,9 @@ def register(request):
     else:
         form = UserRegisterForm()
     return render(request, 'jukebox/register.html', {'form': form})
+
+def spotify_login(request):
+    # Создаем объект AuthURL, вызываем его метод get и берем оттуда ссылку
+    view = AuthURL()
+    url = view.get(request).data.get('url')
+    return redirect(url)

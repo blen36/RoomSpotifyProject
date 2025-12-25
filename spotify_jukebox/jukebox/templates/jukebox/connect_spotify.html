@@ -1,0 +1,15 @@
+{% extends 'jukebox/base.html' %}
+
+{% block content %}
+<div class="flex flex-col items-center justify-center min-h-[50vh] text-center">
+    <h1 class="text-3xl font-bold mb-4">Почти готово!</h1>
+    <p class="text-gray-400 mb-8">Для создания комнаты нужно предоставить доступ к твоему плееру Spotify.</p>
+    
+    <a href="{% url 'spotify-auth' %}" 
+       class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-8 rounded-full transition duration-300">
+        Подключить Spotify
+    </a>
+    
+    <a href="{% url 'home' %}" class="mt-4 text-sm text-gray-500 hover:underline">Отмена</a>
+</div>
+{% endblock %}

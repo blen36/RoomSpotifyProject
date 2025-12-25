@@ -179,3 +179,14 @@ def add_to_queue(host_user, uri):
 def prev_song(host_user):
     # Конечная точка me/player/previous переключает на прошлый трек
     return execute_spotify_api_request(host_user, "me/player/previous", post_=True)
+
+# Добавь это в конец твоего файла с утилитами
+def is_spotify_authenticated(user):
+    """Проверяет, есть ли у пользователя токен и не истек ли он."""
+    tokens = get_user_tokens(user)
+    if tokens:
+        # Если токен истек, пытаемся обновить его прямо здесь
+        if tokens.expires_in <= timezone.now():
+            refresh_spotify_token(tokens)
+        return True
+    return False
