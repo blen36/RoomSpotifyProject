@@ -46,7 +46,7 @@ class Room(models.Model):
 
     def is_host_online(self):
             # Даем хосту 15 секунд запаса (на случай лагов интернета)
-        return (timezone.now() - self.last_active).total_seconds() < 15
+        return (timezone.now() - self.last_active).total_seconds() < 180
 
     def __str__(self):
         return f"Room {self.code} ({self.host.username})"

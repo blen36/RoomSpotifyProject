@@ -232,16 +232,21 @@ class CurrentSong(APIView):
             return response
 
         # --- ЛОГИКА ЗАКРЫТИЯ КОМНАТЫ ---
+        # --- ЛОГИКА ЖИЗНИ КОМНАТЫ (Heartbeat) ---
         host = room.host
         is_host = (request.user == host)
 
         if is_host:
-            # Хост на связи — обновляем время "пульса"
+            # Хост активен — обновляем время "пульса"
+            # Мы используем update_fields для производительности
+            room.last_active = timezone.now()
             room.save(update_fields=['last_active'])
         else:
-            # Зашел гость — проверяем, жив ли хост
+            # Зашел гость — проверяем, не "протухла" ли комната
             if not room.is_host_online():
-                room.delete() # Удаляем комнату, так как хост пропал
+                # Если хост не подавал признаков жизни (запросов) больше N секунд
+                room.delete()
+                # HTMX поймет этот заголовок и сделает редирект на стороне браузера
                 response = HttpResponse(status=204)
                 response['HX-Redirect'] = '/'
                 return response
@@ -267,25 +272,31 @@ class CurrentSong(APIView):
                 if queued_spotify_id == current_spotify_id:
                     first_track.delete()
 
-        # 6. Формируем контекст
-        if song_info and 'id' in song_info:
-            duration = song_info.get('duration', 0)
-            current_time = song_info.get('time', 0)
-            progress = (current_time / duration * 100) if duration > 0 else 0
+                # 6. Формируем контекст
+            if song_info and 'id' in song_info:
+                current_song_id = song_info.get('id')
+                duration = song_info.get('duration', 0)
+                current_time = song_info.get('time', 0)
+                progress = (current_time / duration * 100) if duration > 0 else 0
 
-            context = {
-                'title': song_info.get('title'),
-                'artist': song_info.get('artist'),
-                'image_url': song_info.get('image_url'),
-                'is_playing': song_info.get('is_playing'),
-                'votes': Vote.objects.filter(room=room, song_id=song_info.get('id')).count(),
-                'votes_required': room.votes_to_skip,
-                'progress_percent': progress,
-                'display_time': f"{int((current_time / 1000) // 60)}:{int((current_time / 1000) % 60):02d}",
-                'display_duration': f"{int((duration / 1000) // 60)}:{int((duration / 1000) % 60):02d}",
-                'is_host': is_host,
-            }
-            return render(request, 'jukebox/song.html', context)
+                votes_count = Vote.objects.filter(room=room, song_id=song_info.get('id')).count()
+                vote_pct = (votes_count / room.votes_to_skip * 100) if room.votes_to_skip > 0 else 0
+
+                context = {
+                    'title': song_info.get('title'),
+                    'artist': song_info.get('artist'),
+                    'image_url': song_info.get('image_url'),
+                    'is_playing': song_info.get('is_playing'),
+                    'votes': votes_count,
+                    'votes_required': room.votes_to_skip,
+                    'vote_percentage': vote_pct,
+                    'progress_percent': progress,
+                    'display_time': f"{int((current_time / 1000) // 60)}:{int((current_time / 1000) % 60):02d}",
+                    'display_duration': f"{int((duration / 1000) // 60)}:{int((duration / 1000) % 60):02d}",
+                    'is_host': is_host,
+                    'guest_can_pause': room.guest_can_pause,  # КРИТИЧЕСКИ ВАЖНО для шаблона!
+                }
+                return render(request, 'jukebox/song.html', context)
 
         # 7. Если Spotify открыт, но ничего не играет
         return render(request, 'jukebox/song.html', {
@@ -335,19 +346,17 @@ class SkipSong(APIView):
         if not room:
             return Response({'Error': 'Room not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Проверяем, является ли пользователь хостом
         is_host = request.user.is_authenticated and room.host == request.user
 
-        # ЛОГИКА: Скипаем, если это Хост ИЛИ если в настройках разрешено гостям (guest_can_pause)
+        # Если это хост ИЛИ гость с правами "guest_can_pause"
         if is_host or room.guest_can_pause:
             skip_song(room.host)
 
-            # Очищаем голоса за пропуск, так как песня сменилась
+            # ВАЖНО: Очищаем ВСЕ голоса в комнате, так как песня принудительно сменилась
             Vote.objects.filter(room=room).delete()
 
             return Response({}, status=status.HTTP_204_NO_CONTENT)
 
-        # Если гость нажал, а прав нет — возвращаем 403
         return Response({'Message': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
 
 class SearchSong(APIView):
@@ -437,29 +446,45 @@ class VoteToSkip(APIView):
     def post(self, request, format=None):
         room_code = self.request.session.get('room_code')
         room = Room.objects.filter(code=room_code).first()
-        if not room: return Response({}, status=status.HTTP_404_NOT_FOUND)
+        if not room:
+            return Response({'error': 'Комната не найдена'}, status=status.HTTP_404_NOT_FOUND)
 
         song_info = get_current_song(room.host)
         if not song_info or 'id' not in song_info:
-            return Response({'message': 'Nothing playing'}, status=status.HTTP_204_NO_CONTENT)
+            return Response({'message': 'Сейчас ничего не играет'}, status=status.HTTP_204_NO_CONTENT)
 
         current_song_id = song_info.get('id')
+        # Используем session_key, чтобы отличать гостей без регистрации
         user_session = self.request.session.session_key
+        if not user_session:
+            self.request.session.create()
+            user_session = self.request.session.session_key
 
+        # 1. Очистка: если в базе висят голоса за СТАРУЮ песню — удаляем их
         Vote.objects.filter(room=room).exclude(song_id=current_song_id).delete()
-        vote_exists = Vote.objects.filter(room=room, user=user_session, song_id=current_song_id).exists()
+
+        # 2. Проверяем, не голосовал ли этот юзер уже за ЭТУ песню
+        vote_exists = Vote.objects.filter(
+            room=room,
+            user=user_session,
+            song_id=current_song_id
+        ).exists()
 
         if not vote_exists:
             Vote.objects.create(room=room, user=user_session, song_id=current_song_id)
+        else:
+            return Response({'message': 'Вы уже проголосовали'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # 3. Считаем актуальное кол-во голосов
         votes_count = Vote.objects.filter(room=room, song_id=current_song_id).count()
 
+        # 4. Сравниваем с настройкой хоста
         if votes_count >= room.votes_to_skip:
             skip_song(room.host)
             Vote.objects.filter(room=room, song_id=current_song_id).delete()
+            return Response({'message': 'Skipped'}, status=status.HTTP_200_OK)
 
-        return Response({}, status=status.HTTP_204_NO_CONTENT)
-
+        return Response({'votes': votes_count, 'required': room.votes_to_skip}, status=status.HTTP_200_OK)
 
 class LeaveRoom(APIView):
     def post(self, request, format=None):
