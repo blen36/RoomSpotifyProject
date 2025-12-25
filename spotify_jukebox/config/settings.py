@@ -57,7 +57,7 @@ SESSION_COOKIE_SAMESITE = 'Lax'
 # --- SPOTIFY НАСТРОЙКИ ---
 
 # УБЕДИСЬ, ЧТО ЭТОТ URI УКАЗАН В SPOTIFY DASHBOARD:
-SPOTIPY_REDIRECT_URI = 'https://room-spotify.ru/redirect/'
+SPOTIPY_REDIRECT_URI = 'https://room-spotify.ru/api/spotify/callback/'
 
 INSTALLED_APPS = [
     'django.contrib.admin',

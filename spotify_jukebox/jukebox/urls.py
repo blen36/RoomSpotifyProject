@@ -5,7 +5,8 @@ from .views import (
     AuthURL, IsAuthenticated, CurrentSong,
     PauseSong, PlaySong, SkipSong, SearchSong,
     AddToQueue, VoteToSkip, LeaveRoom, UpdateRoom,
-    GetRoom, spotify_callback, PrevSong, GetQueue
+    GetRoom, spotify_callback, PrevSong, GetQueue,
+    spotify_login
 )
 
 urlpatterns = [
@@ -21,6 +22,8 @@ urlpatterns = [
     path('room/<str:room_code>/', room, name='room'),
 
     # API
+    path('api/get-auth-url/', AuthURL.as_view()), # Оставь для фронтенда, если нужно
+    path('spotify-login/', spotify_login, name='spotify-auth'), # Добавь это для кнопки
     path('api/current-song/', CurrentSong.as_view(), name='current_song'),
     path('api/pause-song/', PauseSong.as_view()),
     path('api/play-song/', PlaySong.as_view()),
@@ -35,5 +38,5 @@ urlpatterns = [
     path('api/get-room/', GetRoom.as_view()),
     path('leave-room/', LeaveRoom.as_view()),
     path('update-room/', UpdateRoom.as_view()),
-    path('redirect/', spotify_callback, name='spotify_callback'),
+    path('api/spotify/callback/', spotify_callback, name='spotify_callback'),
 ]
